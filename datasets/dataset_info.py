@@ -2,9 +2,9 @@ import numpy as np
 
 class KITTICategory(object):
    
-    CLASSES = ['Car', 'Pedestrian', 'Cyclist']
+    CLASSES = ['car', 'Pedestrian', 'Cyclist']
     CLASS_MEAN_SIZE = {
-        'Car': np.array([3.88311640418, 1.62856739989, 1.52563191462]),
+        'car': np.array([3.88311640418, 1.62856739989, 1.52563191462]),
         'Pedestrian': np.array([0.84422524, 0.66068622, 1.76255119]),
         'Cyclist': np.array([1.76282397, 0.59706367, 1.73698127]),
     }

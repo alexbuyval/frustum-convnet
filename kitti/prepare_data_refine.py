@@ -20,7 +20,14 @@ from draw_util import get_lidar_in_image_fov
 
 from ops.pybind11.rbbox_iou import rbbox_iou_3d
 from utils.box_util import box3d_iou
+from utils.visualize import render_points_3d_interactive
 
+from lyft_dataset_sdk.lyftdataset import LyftDataset
+from lyft_dataset_sdk.utils.data_classes import LidarPointCloud, Box
+from lyft_dataset_sdk.utils.geometry_utils import view_points, transform_matrix, points_in_box, quaternion_yaw
+
+from pathlib import Path
+from pyquaternion import Quaternion
 
 def extract_boxes(objects, type_whitelist, remove_diff=False):
     boxes_2d = []
@@ -234,6 +241,245 @@ def random_shift_rotate_box3d(obj_array, shift_ratio=0.1):
             # print(ious[0], ious[1])
 
             return new_box3d
+
+def extract_frustum_data_from_lyft(train_filename, val_filename,  perturb_box2d=False, augmentX=1, type_whitelist=['car'], remove_diff=False):
+    ''' Extract point clouds and corresponding annotations in frustums
+        defined generated from 2D bounding boxes
+        Lidar points and 3d boxes are in *rect camera* coord system
+        (as that in 3d box label files)
+
+    Input:
+        idx_filename: string, each line of the file is a sample ID
+        split: string, either trianing or testing
+        output_filename: string, the name for output .pickle file
+        viz: bool, whether to visualize extracted data
+        perturb_box2d: bool, whether to perturb the box2d
+            (used for data augmentation in train set)
+        augmentX: scalar, how many augmentations to have for each 2D box.
+        type_whitelist: a list of strings, object types we are interested in.
+    Output:
+        None (will write a .pickle file to the disk)
+    '''
+
+    lyft_ds = '/media/alex/Data/Datasets/Lyft/3d-object-detection-for-autonomous-vehicles'
+    type = 'train'
+    level5data = LyftDataset(data_path='./' + type + '_data/', json_path=lyft_ds + '/' + type + '_data',
+                                 verbose=True)
+
+
+    id_train_list = []  # int number
+    box3d_train_list = []  # (8,3) array in rect camera coord
+    input_train_list = []  # channel number = 4, xyz,intensity in rect camera coord
+    label_train_list = []  # 1 for roi object, 0 for clutter
+    type_train_list = []  # string e.g. Car
+    heading_train_list = []  # ry (along y-axis in rect camera coord) radius of
+    # (cont.) clockwise angle from positive x axis in velo coord.
+    box3d_size_train_list = []  # array of l,w,h
+    frustum_angle_train_list = []  # angle of 2d box center from pos x-axis
+
+    gt_box2d_train_list = []
+    calib_train_list = []
+
+    enlarge_box3d_train_list = []
+    enlarge_box3d_size_train_list = []
+    enlarge_box3d_angle_train_list = []
+
+    id_val_list = []  # int number
+    box3d_val_list = []  # (8,3) array in rect camera coord
+    input_val_list = []  # channel number = 4, xyz,intensity in rect camera coord
+    label_val_list = []  # 1 for roi object, 0 for clutter
+    type_val_list = []  # string e.g. Car
+    heading_val_list = []  # ry (along y-axis in rect camera coord) radius of
+    # (cont.) clockwise angle from positive x axis in velo coord.
+    box3d_size_val_list = []  # array of l,w,h
+    frustum_angle_val_list = []  # angle of 2d box center from pos x-axis
+
+    gt_box2d_val_list = []
+    calib_val_list = []
+
+    enlarge_box3d_val_list = []
+    enlarge_box3d_size_val_list = []
+    enlarge_box3d_angle_val_list = []
+
+    pos_cnt = 0
+    all_cnt = 0
+    data_idx = 0
+    scene_idx=0
+    for scene in level5data.scene:
+        cur_sample_token = scene["first_sample_token"]
+        scene_idx+=1
+        sensor_channel = 'LIDAR_TOP'  # also try this e.g. with 'LIDAR_TOP'
+        while cur_sample_token:
+            print("Scene {0} Current sample token: {1}".format(scene_idx, cur_sample_token))
+            my_sample = level5data.get('sample', cur_sample_token)
+            lidar_token = my_sample['data']['LIDAR_TOP']
+            lidar_data = level5data.get('sample_data', my_sample['data']['LIDAR_TOP'])
+            cs_record = level5data.get('calibrated_sensor', lidar_data['calibrated_sensor_token'])
+            ego_pose = level5data.get("ego_pose", lidar_data["ego_pose_token"])
+            lidar_pc = LidarPointCloud.from_file(Path(os.path.join('./' + type + '_data/', lidar_data['filename'])))
+            if lidar_pc is None:
+                cur_sample_token = my_sample['next']
+                continue
+            lidar_pc = lidar_pc.points[:3, :]
+            #change y and z axes to fit the kitti format
+            q_x_90 = Quaternion(axis=[1, 0, 0], angle=-3.14/2.0)
+            lidar_pc = np.dot(q_x_90.rotation_matrix, lidar_pc)
+
+            gt_boxes = level5data.get_boxes(lidar_data['token'])
+            for gt_box in gt_boxes:
+                if not gt_box.name in type_whitelist:
+                    continue
+                # Move box to ego vehicle coord system
+                gt_box.translate(-np.array(ego_pose["translation"]))
+                gt_box.rotate(Quaternion(ego_pose["rotation"]).inverse)
+
+                #  Move box to sensor coord system
+                gt_box.translate(-np.array(cs_record["translation"]))
+                gt_box.rotate(Quaternion(cs_record["rotation"]).inverse)
+
+                pc_rect = lidar_pc.T
+                #mask_inside_box = points_in_box(box, lidar_pc)
+                #points_inside = lidar_pc[:, mask_inside_box]
+
+                # change y and z axes to fit the kitti format
+                gt_box.rotate(q_x_90)
+
+                l, w, h = gt_box.wlh[1], gt_box.wlh[0], gt_box.wlh[2]
+                cx, cy, cz = gt_box.center[0],gt_box.center[1],gt_box.center[2]
+                ry = gt_box.orientation.yaw_pitch_roll[0]
+
+                #cy = cy - h / 2
+
+                obj_array = np.array([cx, cy, cz, l, w, h, ry])
+
+                box3d_pts_3d = compute_box_3d_obj_array(obj_array)
+
+                ratio = 1.2
+                enlarge_obj_array = obj_array.copy()
+                enlarge_obj_array[3:6] = enlarge_obj_array[3:6] * ratio
+
+                for _ in range(augmentX):
+
+                    if perturb_box2d:
+                        # print(box3d_align)
+
+                        enlarge_obj_array = random_shift_rotate_box3d(
+                            enlarge_obj_array, 0.05)
+                        box3d_corners_enlarge = compute_box_3d_obj_array(
+                            enlarge_obj_array)
+
+                    else:
+                        box3d_corners_enlarge = compute_box_3d_obj_array(
+                            enlarge_obj_array)
+
+                    _, inds = extract_pc_in_box3d(pc_rect, box3d_corners_enlarge)
+
+                    pc_in_cuboid = pc_rect[inds]
+
+                    if pc_in_cuboid.shape[0]<200:
+                        continue
+
+                    _, inds = extract_pc_in_box3d(pc_in_cuboid, box3d_pts_3d)
+
+                    label = np.zeros((pc_in_cuboid.shape[0]))
+                    label[inds] = 1
+
+                    _, inds = extract_pc_in_box3d(pc_rect, box3d_pts_3d)
+
+                    # print(np.sum(label), np.sum(inds))
+
+                    # Get 3D BOX heading
+                    heading_angle = ry
+                    # Get 3D BOX size
+                    box3d_size = np.array([l, w, h])
+
+                    # Reject too far away object or object without points
+                    if np.sum(label) == 0:
+                        continue
+
+                    box3d_center = enlarge_obj_array[:3]
+
+                    frustum_angle = -1 * np.arctan2(box3d_center[2],
+                                                    box3d_center[0])
+
+                    #render_points_3d_interactive(pc_in_cuboid.T, gt_box)
+                    data_idx += 1
+                    if data_idx % 8 != 0:
+                        id_train_list.append(data_idx)
+                        box3d_train_list.append(box3d_pts_3d)
+                        input_train_list.append(pc_in_cuboid)
+                        label_train_list.append(label)
+                        type_train_list.append('car')
+                        heading_train_list.append(heading_angle)
+                        box3d_size_train_list.append(box3d_size)
+                        frustum_angle_train_list.append(frustum_angle)
+
+                        gt_box2d_train_list.append(None)
+                        calib_train_list.append(None)
+                        enlarge_box3d_train_list.append(box3d_corners_enlarge)
+                        enlarge_box3d_size_train_list.append(enlarge_obj_array[3:6])
+                        enlarge_box3d_angle_train_list.append(enlarge_obj_array[-1])
+                    else:
+                        id_val_list.append(data_idx)
+                        box3d_val_list.append(box3d_pts_3d)
+                        input_val_list.append(pc_in_cuboid)
+                        label_val_list.append(label)
+                        type_val_list.append('car')
+                        heading_val_list.append(heading_angle)
+                        box3d_size_val_list.append(box3d_size)
+                        frustum_angle_val_list.append(frustum_angle)
+
+                        gt_box2d_val_list.append(None)
+                        calib_val_list.append(None)
+                        enlarge_box3d_val_list.append(box3d_corners_enlarge)
+                        enlarge_box3d_size_val_list.append(enlarge_obj_array[3:6])
+                        enlarge_box3d_angle_val_list.append(enlarge_obj_array[-1])
+                    # collect statistics
+                    pos_cnt += np.sum(label)
+                    all_cnt += pc_in_cuboid.shape[0]
+
+            cur_sample_token = my_sample['next']
+
+    print('total_objects in train %d' % len(id_train_list))
+    print('total_objects in val %d' % len(id_val_list))
+    print('Average pos ratio: %f' % (pos_cnt / float(all_cnt)))
+    print('Average npoints: %f' % (float(all_cnt) / (len(id_train_list)+len(id_val_list))))
+
+    with open(train_filename, 'wb') as fp:
+        pickle.dump(id_train_list, fp, -1)
+        pickle.dump(box3d_train_list, fp, -1)
+        pickle.dump(input_train_list, fp, -1)
+        pickle.dump(label_train_list, fp, -1)
+        pickle.dump(type_train_list, fp, -1)
+        pickle.dump(heading_train_list, fp, -1)
+        pickle.dump(box3d_size_train_list, fp, -1)
+        pickle.dump(frustum_angle_train_list, fp, -1)
+        pickle.dump(gt_box2d_train_list, fp, -1)
+        pickle.dump(calib_train_list, fp, -1)
+
+        pickle.dump(enlarge_box3d_train_list, fp, -1)
+        pickle.dump(enlarge_box3d_size_train_list, fp, -1)
+        pickle.dump(enlarge_box3d_angle_train_list, fp, -1)
+
+    print('save in {}'.format(train_filename))
+
+    with open(val_filename, 'wb') as fp:
+        pickle.dump(id_val_list, fp, -1)
+        pickle.dump(box3d_val_list, fp, -1)
+        pickle.dump(input_val_list, fp, -1)
+        pickle.dump(label_val_list, fp, -1)
+        pickle.dump(type_val_list, fp, -1)
+        pickle.dump(heading_val_list, fp, -1)
+        pickle.dump(box3d_size_val_list, fp, -1)
+        pickle.dump(frustum_angle_val_list, fp, -1)
+        pickle.dump(gt_box2d_val_list, fp, -1)
+        pickle.dump(calib_val_list, fp, -1)
+
+        pickle.dump(enlarge_box3d_val_list, fp, -1)
+        pickle.dump(enlarge_box3d_size_val_list, fp, -1)
+        pickle.dump(enlarge_box3d_angle_val_list, fp, -1)
+
+    print('save in {}'.format(val_filename))
 
 
 def extract_frustum_data(idx_filename, split, output_filename,
@@ -841,6 +1087,9 @@ if __name__ == '__main__':
     parser.add_argument('--gen_from_folder', default=None,
                         type=str, help='Generate frustum data from folder')
 
+    parser.add_argument('--gen_train_lyft', action='store_true',
+                        help='Generate frustum data from Lyft dataset')
+
     args = parser.parse_args()
 
     np.random.seed(3)
@@ -927,4 +1176,13 @@ if __name__ == '__main__':
             os.path.join(save_dir, output_prefix + postfix),
             res_label_dir,
             type_whitelist=type_whitelist)
+
+    if args.gen_train_lyft:
+        type_whitelist = ['car']
+        extract_frustum_data_from_lyft(
+            os.path.join(save_dir, output_prefix + 'train.pickle'),
+            os.path.join(save_dir, output_prefix + 'val.pickle'),
+            perturb_box2d=True, augmentX=1,
+            type_whitelist=type_whitelist)
+
 

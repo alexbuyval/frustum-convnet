@@ -20,7 +20,7 @@ TEST:
 
 DATA:
   FILE: datasets/provider_sample_refine.py
-  DATA_ROOT: kitti/data/pickle_data_refine
+  DATA_ROOT: train_data/pickles/one_scene
   CAR_ONLY: True
   RTC: True
   WITH_EXTRA_FEAT: False

@@ -24,6 +24,8 @@ import torchvision
 import pickle
 import subprocess
 
+from pyquaternion import Quaternion
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 sys.path.append(ROOT_DIR)
@@ -35,6 +37,9 @@ from configs.config import assert_and_infer_cfg
 
 from utils.training_states import TrainingStates
 from utils.utils import get_accuracy, AverageMeter, import_from_file, get_logger
+
+from utils.visualize import render_points_3d_interactive
+from utils.box_class import Box
 
 from datasets.provider_sample import from_prediction_to_label_format
 
@@ -196,9 +201,13 @@ def test(model, test_dataset, test_loader, output_filename, result_dir=None):
 
         point_clouds = data_dicts['point_cloud']
         rot_angles = data_dicts['rot_angle']
+        print("rot_angles: ", rot_angles)
         # optional
         ref_centers = data_dicts.get('ref_center')
         rgb_probs = data_dicts.get('rgb_prob')
+
+        print("center_ref1.shape: ", data_dicts.get('center_ref1').shape)
+        print("center_ref2.shape: ", data_dicts.get('center_ref2').shape)
 
         # from ground truth box detection
         if rgb_probs is None:
@@ -219,6 +228,9 @@ def test(model, test_dataset, test_loader, output_filename, result_dir=None):
 
         torch.cuda.synchronize()
         tic = time.time()
+
+        print(point_clouds.shape)
+
         with torch.no_grad():
             outputs = model(data_dicts_var)
 
@@ -272,9 +284,30 @@ def test(model, test_dataset, test_loader, output_filename, result_dir=None):
             for n in range(num_pred):
                 x1, y1, x2, y2 = box2d
                 score = single_scores[n]
+                ref_center[0] = 0.0
+                ref_center[1] = 0.0
+                ref_center[2] = 0.0
                 h, w, l, tx, ty, tz, ry = from_prediction_to_label_format(
                     single_centers[n], single_headings[n], single_sizes[n], rot_angle, ref_center)
                 output = [x1, y1, x2, y2, tx, ty, tz, h, w, l, ry, score]
+
+                if i > 40:
+                    render_points = point_clouds.squeeze().cpu().numpy()
+
+                    q = Quaternion(axis=[0, 0, 1], angle=0.0)
+                    box3d = Box(
+                        center=[tx, ty, tz],
+                        size=[h,l,w],
+                        orientation=q,
+                        name='car',
+                        score=1.0
+                    )
+                    render_points_3d_interactive(render_points, box3d)
+
+                    print(output)
+                    print(ref_center)
+
+
                 det_results[data_idx][class_type].append(output)
 
     num_images = len(det_results)
