@@ -26,6 +26,10 @@ from ops.query_depth_point.query_depth_point import QueryDepthPoint
 from ops.pybind11.box_ops_cc import rbbox_iou_3d_pair
 from models.box_transform import size_decode, size_encode, center_decode, center_encode, angle_decode, angle_encode
 
+from utils.visualize import render_points_3d_interactive
+from utils.box_class import Box
+
+from pyquaternion import Quaternion
 
 NUM_SIZE_CLUSTER = len(KITTICategory.CLASSES)
 MEAN_SIZE_ARRAY = KITTICategory.MEAN_SIZE_ARRAY
@@ -443,6 +447,29 @@ class PointNetDet(nn.Module):
         center_preds = center_decode(center_ref2, center_boxnet)
         heading = angle_decode(heading_res_norm, heading_class_label)
         size = size_decode(size_res_norm, mean_size_array, size_class_label)
+
+        render_points = point_cloud.squeeze().cpu().numpy()
+        center_c = center_preds.cpu().numpy()
+        size_c = size.cpu().numpy()
+        q = Quaternion(axis=[0, 1, 0], angle=heading[0])
+        box3d = Box(
+            center=[center_c[0,0], center_c[0,1], center_c[0,2]],
+            size=[size_c[0,2], size_c[0,0], size_c[0,1]],
+            orientation=q,
+            name='car',
+            score=1.0
+        )
+        center_gt = center_label.cpu().numpy()
+        size_gt = size_label.cpu().numpy()
+        q_gt = Quaternion(axis=[0, 1, 0], angle=heading_label[0])
+        box3d_gt = Box(
+            center=[center_gt[0,0], center_gt[0,1], center_gt[0,2]],
+            size=[size_gt[0,2], size_gt[0,0], size_gt[0,1]],
+            orientation=q_gt,
+            name='car',
+            score=1.0
+        )
+        render_points_3d_interactive(render_points, box3d, box3d_gt)
 
         corners_loss, corner_gts = self.get_corner_loss(
             (center_preds, heading, size),

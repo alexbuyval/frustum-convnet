@@ -15,12 +15,12 @@ MODEL:
   NUM_CLASSES: 2
 
 TEST:
-  BATCH_SIZE: 1
+  BATCH_SIZE: 32
   METHOD: nms
 
 DATA:
   FILE: datasets/provider_sample_refine.py
-  DATA_ROOT: train_data/pickles/one_scene
+  DATA_ROOT: train_data/pickles
   CAR_ONLY: True
   RTC: True
   WITH_EXTRA_FEAT: False

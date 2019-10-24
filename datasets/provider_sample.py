@@ -373,7 +373,7 @@ def from_prediction_to_label_format(center, angle, size, rot_angle, ref_center=N
         ty = ty + ref_center[1]
         tz = tz + ref_center[2]
 
-    ty += h / 2.0
+    #ty += h / 2.0
     return h, w, l, tx, ty, tz, ry
 
 

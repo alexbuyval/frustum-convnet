@@ -131,3 +131,7 @@ output/
 
 .vscode/*
 
+pretrained_models/
+.idea/
+train_data/
+

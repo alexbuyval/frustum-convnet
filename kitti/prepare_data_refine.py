@@ -376,7 +376,7 @@ def extract_frustum_data_from_lyft(train_filename, val_filename,  perturb_box2d=
 
                     pc_in_cuboid = pc_rect[inds]
 
-                    if pc_in_cuboid.shape[0]<200:
+                    if pc_in_cuboid.shape[0]<50:
                         continue
 
                     _, inds = extract_pc_in_box3d(pc_in_cuboid, box3d_pts_3d)
@@ -1182,7 +1182,7 @@ if __name__ == '__main__':
         extract_frustum_data_from_lyft(
             os.path.join(save_dir, output_prefix + 'train.pickle'),
             os.path.join(save_dir, output_prefix + 'val.pickle'),
-            perturb_box2d=True, augmentX=1,
+            perturb_box2d=True, augmentX=5,
             type_whitelist=type_whitelist)
 
 
